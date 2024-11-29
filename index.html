@@ -1,0 +1,346 @@
+<html><head><base href="." /><title>AcadManage - Gerenciador de Tarefas Acadêmicas</title><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><script src="https://cdn.jsdelivr.net/npm/chart.js"></script><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"><style>
+:root {
+    --primary: #4a90e2;
+    --secondary: #6c757d;
+    --success: #28a745;
+    --danger: #dc3545;
+    --warning: #ffc107;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #f5f6fa;
+}
+
+.task-card {
+    border-radius: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: transform 0.2s;
+}
+
+.task-card:hover {
+    transform: translateY(-2px);
+}
+
+.notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1000;
+}
+
+.chart-container {
+    background: white;
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.status-badge {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+}
+
+.add-task-form {
+    background: white;
+    border-radius: 10px;
+    padding: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+</style></head><body>
+<div class="container py-4">
+    <h1 class="text-center mb-4">AcadManage</h1>
+    
+    <!-- Add Task Form -->
+    <div class="add-task-form mb-4">
+        <h3>Adicionar Nova Tarefa</h3>
+        <form id="taskForm">
+            <div class="mb-3">
+                <label class="form-label">Nome da Tarefa</label>
+                <input type="text" class="form-control" id="taskName" required>
+            </div>
+            <div class="row">
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Data de Entrega</label>
+                    <input type="date" class="form-control" id="dueDate" required>
+                </div>
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Horário</label>
+                    <input type="time" class="form-control" id="dueTime" required>
+                </div>
+                <div class="col-md-4 mb-3">
+                    <label class="form-label">Valor (Pontos)</label>
+                    <input type="number" class="form-control" id="taskValue" required>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Adicionar Tarefa</button>
+        </form>
+    </div>
+
+    <!-- Task Filters -->
+    <div class="mb-4">
+        <div class="btn-group" role="group">
+            <button type="button" class="btn btn-outline-primary active" data-filter="all">Todas</button>
+            <button type="button" class="btn btn-outline-primary" data-filter="pending">Pendentes</button>
+            <button type="button" class="btn btn-outline-primary" data-filter="completed">Concluídas</button>
+            <button type="button" class="btn btn-outline-primary" data-filter="late">Em Atraso</button>
+        </div>
+    </div>
+
+    <!-- Tasks Container -->
+    <div class="row" id="tasksContainer"></div>
+
+    <!-- Weekly Progress Chart -->
+    <div class="chart-container mt-4">
+        <h3>Progresso Semanal</h3>
+        <canvas id="weeklyProgress"></canvas>
+    </div>
+</div>
+
+<script>
+class Task {
+    constructor(name, dueDate, dueTime, value) {
+        this.id = parseInt(Date.now()); // Ensure id is always a number
+        this.name = name;
+        this.dueDate = dueDate;
+        this.dueTime = dueTime;
+        this.value = parseFloat(value); // Convert value to number
+        this.completed = false;
+        this.completedDate = null;
+        this.notified = false;
+    }
+
+    isLate() {
+        const now = new Date();
+        const due = new Date(`${this.dueDate}T${this.dueTime}`);
+        return now > due && !this.completed;
+    }
+}
+
+class AcadManage {
+    constructor() {
+        this.tasks = [];
+        this.initializeChart(); // Move chart initialization first
+        this.loadTasks();
+        this.initializeEventListeners();
+        this.checkForLateTasks();
+    }
+
+    loadTasks() {
+        const savedTasks = localStorage.getItem('tasks');
+        if (savedTasks) {
+            const parsedTasks = JSON.parse(savedTasks);
+            this.tasks = parsedTasks.map(taskData => {
+                const task = new Task(
+                    taskData.name,
+                    taskData.dueDate,
+                    taskData.dueTime,
+                    taskData.value
+                );
+                task.id = taskData.id;
+                task.completed = taskData.completed;
+                task.completedDate = taskData.completedDate;
+                task.notified = taskData.notified;
+                return task;
+            });
+        } else {
+            this.tasks = [];
+        }
+        this.renderTasks();
+        this.updateChart();
+    }
+
+    saveTasks() {
+        localStorage.setItem('tasks', JSON.stringify(this.tasks));
+    }
+
+    addTask(name, dueDate, dueTime, value) {
+        const task = new Task(name, dueDate, dueTime, value);
+        this.tasks.push(task);
+        this.saveTasks();
+        this.renderTasks();
+        this.updateChart();
+    }
+
+    completeTask(taskId) {
+        const task = this.tasks.find(t => t.id === taskId);
+        if (task) {
+            task.completed = true;
+            task.completedDate = new Date().toISOString();
+            this.saveTasks();
+            this.renderTasks();
+            this.updateChart();
+        }
+    }
+
+    renderTasks() {
+        const container = document.getElementById('tasksContainer');
+        container.innerHTML = '';
+
+        const activeFilter = document.querySelector('[data-filter].active').dataset.filter;
+        
+        const filteredTasks = this.tasks.filter(task => {
+            if (activeFilter === 'all') return true;
+            if (activeFilter === 'completed' && task.completed) return true;
+            if (activeFilter === 'pending' && !task.completed && !task.isLate()) return true;
+            if (activeFilter === 'late' && task.isLate()) return true;
+            return false;
+        });
+
+        filteredTasks.forEach(task => {
+            const status = task.completed ? 'completed' : 
+                          task.isLate() ? 'late' : 'pending';
+
+            const statusClass = {
+                completed: 'success',
+                late: 'danger',
+                pending: 'warning'
+            }[status];
+
+            const card = document.createElement('div');
+            card.className = 'col-md-4 mb-3';
+            card.innerHTML = `
+                <div class="task-card card">
+                    <div class="card-body">
+                        <span class="status-badge badge bg-${statusClass}">
+                            ${status.charAt(0).toUpperCase() + status.slice(1)}
+                        </span>
+                        <h5 class="card-title">${task.name}</h5>
+                        <p class="card-text">
+                            Data: ${task.dueDate}<br>
+                            Horário: ${task.dueTime}<br>
+                            Valor: ${task.value} pontos
+                        </p>
+                        ${!task.completed ? `
+                            <button class="btn btn-success btn-sm complete-task" 
+                                    data-task-id="${task.id}">
+                                Marcar como Concluída
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+            container.appendChild(card);
+        });
+    }
+
+    filterTasks(filter) {
+        // First render all tasks with the new filter
+        this.renderTasks();
+    }
+
+    initializeChart() {
+        const ctx = document.getElementById('weeklyProgress');
+        if (!ctx) {
+            console.error('Canvas element not found');
+            return;
+        }
+        
+        try {
+            this.chart = new Chart(ctx.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'],
+                    datasets: [{
+                        label: 'Tarefas Concluídas',
+                        data: [0, 0, 0, 0, 0, 0, 0],
+                        backgroundColor: '#4a90e2'
+                    }]
+                },
+                options: {
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            stepSize: 1
+                        }
+                    }
+                }
+            });
+        } catch (error) {
+            console.error('Error initializing chart:', error);
+        }
+    }
+
+    updateChart() {
+        // Add check to ensure chart exists
+        if (!this.chart) {
+            return;
+        }
+        
+        const weekData = [0, 0, 0, 0, 0, 0, 0];
+        
+        this.tasks.forEach(task => {
+            if (task.completed && task.completedDate) {
+                const completedDay = new Date(task.completedDate).getDay();
+                const index = completedDay === 0 ? 6 : completedDay - 1;
+                weekData[index]++;
+            }
+        });
+
+        this.chart.data.datasets[0].data = weekData;
+        this.chart.update();
+    }
+
+    checkForLateTasks() {
+        setInterval(() => {
+            this.tasks.forEach(task => {
+                if (task.isLate() && !task.notified) {
+                    this.showNotification(
+                        `Tarefa Atrasada: ${task.name}`,
+                        `A tarefa "${task.name}" está atrasada!`
+                    );
+                    task.notified = true;
+                }
+            });
+        }, 60000); // Check every minute
+    }
+
+    showNotification(title, message) {
+        const notification = document.createElement('div');
+        notification.className = 'alert alert-danger notification';
+        notification.innerHTML = `
+            <strong>${title}</strong><br>
+            ${message}
+        `;
+        document.body.appendChild(notification);
+        setTimeout(() => notification.remove(), 5000);
+    }
+
+    initializeEventListeners() {
+        document.getElementById('taskForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const name = document.getElementById('taskName').value;
+            const dueDate = document.getElementById('dueDate').value;
+            const dueTime = document.getElementById('dueTime').value;
+            const value = document.getElementById('taskValue').value;
+            
+            this.addTask(name, dueDate, dueTime, value);
+            e.target.reset();
+        });
+
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('complete-task')) {
+                const taskId = parseInt(e.target.dataset.taskId);
+                this.completeTask(taskId);
+            }
+        });
+
+        document.querySelectorAll('[data-filter]').forEach(button => {
+            button.addEventListener('click', (e) => {
+                document.querySelectorAll('[data-filter]').forEach(btn => {
+                    btn.classList.remove('active');
+                });
+                e.target.classList.add('active');
+                this.filterTasks(e.target.dataset.filter);
+            });
+        });
+    }
+}
+
+// Initialize the application
+const app = new AcadManage();
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body></html>
